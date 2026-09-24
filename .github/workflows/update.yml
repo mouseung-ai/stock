@@ -1,0 +1,57 @@
+name: update
+on:
+  schedule:
+    - cron: "5 0-6 * * 1-5"
+    - cron: "5 13-20 * * 1-5"
+    - cron: "0 23 * * 0-4"
+    - cron: "40 7 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "뉴스·전망까지 실행"
+        type: boolean
+        default: true
+permissions:
+  contents: write
+concurrency:
+  group: update
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: git pull --ff-only origin "${GITHUB_REF_NAME}" || true
+      - name: 처음 한 번 zip 풀기
+        run: |
+          Z=$(ls *.zip 2>/dev/null | head -1)
+          if [ -n "$Z" ]; then
+            unzip -oq "$Z" -d _unz
+            rm -rf _unz/ratemon/.github
+            cp -r _unz/ratemon/. .
+            rm -rf _unz "$Z"
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: 수집·분석
+        env:
+          ECOS_API_KEY: ${{ secrets.ECOS_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TZ: Asia/Seoul
+        run: |
+          FULL=""
+          if [ "${{ github.event.schedule }}" = "0 23 * * 0-4" ] || [ "${{ github.event.schedule }}" = "40 7 * * 1-5" ]; then FULL="--full"; fi
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.full }}" = "true" ]; then FULL="--full"; fi
+          python src/main.py $FULL
+      - name: 결과 저장
+        run: |
+          git config user.name "rate-monitor-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "data $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push
